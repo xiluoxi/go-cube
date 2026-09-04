@@ -1,0 +1,112 @@
+cube:
+  name: ApiAuthCandidateView
+  # 登录/用户自信息接口候选视图。原始状态由 Tequila 每十分钟聚合，
+  # 本视图负责跨批次合并，并形成面向应用与 API 的分析指标。
+  sql_table: api_auth_candidate
+
+  segments:
+    org:
+      sql: "org = {vars.org}"
+
+  dimensions:
+    appName:
+      sql: multiIf(arrayExists(x -> position(assumeNotNull(url),'/')!=1 or startsWith(assumeNotNull(url),x[1]),dictGet('host_dict','info',assumeNotNull(host))),arrayFirst(x -> position(assumeNotNull(url),'/')!=1 or startsWith(assumeNotNull(url),x[1]),dictGet('host_dict','info',assumeNotNull(host)))[2],arrayExists(x -> startsWith(assumeNotNull(url),x[1]),dictGet('host_dict','info',splitByRegexp(':\\d+$',assumeNotNull(host))[1]||':*')),arrayFirst(x -> startsWith(assumeNotNull(url),x[1]),dictGet('host_dict','info',splitByRegexp(':\\d+$',assumeNotNull(host))[1]||':*'))[2],host)
+      type: string
+      title: 应用名称
+
+    host:
+      sql: host
+      type: string
+      title: 域名
+
+    method:
+      sql: method
+      type: string
+      title: 请求方法
+
+    url:
+      sql: url
+      type: string
+      title: 请求路径
+
+    candidateType:
+      sql: candidate_type
+      type: string
+      title: 推荐类型
+
+  measures:
+    apiCount:
+      sql: uniqExact(tuple(host, method, url))
+      type: number
+      title: API数量
+
+    candidateRowCount:
+      sql: uniqExact(tuple(candidate_type, host, method, url))
+      type: number
+      title: 推荐记录数
+
+    loginApiCount:
+      sql: uniqExactIf(tuple(host, method, url), candidate_type = 'login')
+      type: number
+      title: 登录接口数
+
+    selfInfoApiCount:
+      sql: uniqExactIf(tuple(host, method, url), candidate_type = 'self_info')
+      type: number
+      title: 用户自信息接口数
+
+    requestCount:
+      sql: sum(request_count)
+      type: number
+      title: 关联请求数
+
+    tokenCount:
+      sql: uniqMerge(token_count)
+      type: number
+      title: 鉴权标识数
+
+    userCount:
+      sql: length(groupUniqArrayMerge(100)(user_identity))
+      type: number
+      title: 用户信息数
+
+    userIdentities:
+      sql: groupUniqArrayMerge(100)(user_identity)
+      sql_mask: "arrayMap(x -> tuple(x.1, if(lengthUTF8(x.2) <= 2, concat(substringUTF8(x.2, 1, 1), '*'), concat(substringUTF8(x.2, 1, 1), repeat('*', lengthUTF8(x.2) - 2), substringUTF8(x.2, lengthUTF8(x.2), 1)))), groupUniqArrayMerge(100)(user_identity))"
+      type: array
+      title: 用户标识样本
+
+    sensTypes:
+      sql: groupUniqArrayMerge(20)(sens_types)
+      type: array
+      title: 用户信息类型
+
+    sensTypeCount:
+      sql: length(groupUniqArrayMerge(20)(sens_types))
+      type: number
+      title: 用户信息类型数
+
+    userTypeCount:
+      sql: "arrayMap(t -> tuple(t, toUInt64(arrayCount(x -> x.1 = t, groupUniqArrayMerge(100)(user_identity)))), arraySort(arrayDistinct(arrayMap(x -> x.1, groupUniqArrayMerge(100)(user_identity)))))"
+      type: array
+      title: 用户信息类型分布
+
+    firstTime:
+      sql: min(first_time)
+      type: time
+      title: 首次发现时间
+
+    lastTime:
+      sql: max(last_time)
+      type: time
+      title: 最近发现时间
+
+    score:
+      sql: max(score)
+      type: number
+      title: 规则置信度
+
+    analysisScore:
+      sql: "toUInt8(least(100, round(max(score) * 0.45 + least(20, log2(uniqMerge(token_count) + 1) * 4) + least(15, length(groupUniqArrayMerge(20)(sens_types)) * 5) + least(10, sum(request_count) / greatest(uniqMerge(token_count), 1) * 2) + multiIf(max(last_time) >= now() - INTERVAL 1 HOUR, 10, max(last_time) >= now() - INTERVAL 6 HOUR, 7, max(last_time) >= now() - INTERVAL 1 DAY, 4, 1))))"
+      type: number
+      title: 分析推荐度
